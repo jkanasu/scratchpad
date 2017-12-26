@@ -36,7 +36,7 @@ IRsend mySender;
 // NEC continous button press will be 0xFFFFFFFF
 #define BUTTON_RED_CHNL_MINUS 0xFFA25D  // for Red identifier 
 #define BUTTON_GREEN_PREV 0xFF22DD  // for Green identifier 
-#define BUTTON_MINUS_BLUE 0xFFE01F  // for Blue identifier 
+#define BUTTON_BLUE_MINUS 0xFFE01F  // for Blue identifier 
 #define BUTTON_EQ 0xFF906F  // for heartbeat 
 #define HEARTBEAT_REQUEST 0xFF906F 
 #define HEARTBEAT_RESPONSE_VU 0x101B
@@ -121,21 +121,26 @@ void sendSignal(){
 }
 
 int numOfSignalsReceived = 0;
+unsigned long currentIRCode = 0;
 void receiveSignal() {
+  currentIRCode = 0;
   if (myReceiver.getResults()) {
     numOfSignalsReceived++;
     Serial.print(F("numOfSignalsReceived is ")); Serial.println(numOfSignalsReceived, DEC);
     Serial.println(F("decoding signal"));
     if(myDecoder.decode()) {
       //myDecoder.dumpResults(true);  //Now print results. Use false for less detail
-      unsigned long decodedValue = myDecoder.value;
+      currentIRCode = myDecoder.value;
       myReceiver.enableIRIn();      //Restart receiver
       Serial.println(F("enabled receiver after decoding"));
-      Serial.print(F("Recvd signal "));Serial.println(decodedValue,HEX);
-      switch(decodedValue) {
+      Serial.print(F("Recvd signal "));Serial.println(currentIRCode,HEX);
+      switch(currentIRCode) {
         case HEARTBEAT_REQUEST:
         case BUTTON_INFO:
         case BUTTON_INFO_REPEAT:
+        case BUTTON_RED_CHNL_MINUS:
+        case BUTTON_GREEN_PREV:
+        case BUTTON_BLUE_MINUS:
           respondHeartBeatRequest();
           break;        
         case HEARTBEAT_RESPONSE_VU:
@@ -148,21 +153,9 @@ void receiveSignal() {
       }
     } else {
       myReceiver.enableIRIn();      //Restart receiver
-      Serial.println(F("enabled receiver failed decode"));
+      Serial.println(F("enabled receiver decode failed"));
     }
   }
-}
-
-int numOfHeartBeatRequests = 0;
-int previousState = BUTTON_OK;
-void respondHeartBeatRequest(){//int receivedCode){
-  numOfHeartBeatRequests++;
-  // the receivedCode can be checked to see if this the device to respond
-  if(previousState == BUTTON_OK) previousState = BUTTON_OK_REPEAT; else previousState = BUTTON_OK;
-  Serial.print("HB requests ");Serial.print(numOfHeartBeatRequests, DEC);Serial.print(" response send ");Serial.println(previousState, HEX);
-  mySender.send(RC5, previousState, 0);
-  // simply blink the self device's identification LED
-  changePinValue(pinLedAnode);
 }
 
 int numOfHeartBeatResponses = 0;
@@ -190,6 +183,25 @@ void identifySelf(){
   Serial.println(F(""));
   // simply keep blinking the inbuilt LED
   //changePinValue(LED_BUILTIN);
+}
+
+int numOfHeartBeatRequests = 0;
+int previousState = BUTTON_OK;
+void respondHeartBeatRequest(){
+  numOfHeartBeatRequests++;
+  // the receivedCode can be checked to see if this the device to respond
+  identifySelf();
+  if( (currentIRCode == BUTTON_RED_CHNL_MINUS && currentLedColor == pinLedRed) ||
+    (currentIRCode == BUTTON_GREEN_PREV && currentLedColor == pinLedGreen) ||
+    (currentIRCode == BUTTON_BLUE_MINUS && currentLedColor == pinLedBlue) ){
+      if(previousState == BUTTON_OK) previousState = BUTTON_OK_REPEAT; else previousState = BUTTON_OK;
+      Serial.print("HB requests ");Serial.print(numOfHeartBeatRequests, DEC);Serial.print(" response send ");Serial.println(previousState, HEX);
+      mySender.send(RC5, previousState, 0);
+      // simply blink the self device's identification LED
+      changePinValue(pinLedAnode);
+    } else {
+      Serial.print("HB request Not Self ");Serial.println(numOfHeartBeatRequests, DEC);
+    }
 }
 
 // this is used to blink the identity led
