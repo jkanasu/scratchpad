@@ -216,11 +216,13 @@ boolean receiveSignalAddressedToTarget(JIRCode& jIRCode, byte destinationAddress
   return retVal;
 }
 
+
 void respondToHB(){
   unsigned long codeToSend = 0;
   codeToSend = formatCodeForSendingResponse(i,REQUEST_HB,0x13);
   mySender.send(NEC,codeToSend,32);
 }
+
 void generateHBResponses(){
   unsigned long codeToSend = 0;
   Serial.println(codeToSend, HEX);
