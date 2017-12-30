@@ -8,7 +8,6 @@
 //can be any order.
 #include <IRLib_P01_NEC.h>
 #include <IRLib_P03_RC5.h>
-#include <IRLib_P08_Samsung36.h>
 #include <IRLibCombo.h>     // After all protocols, include this
 // All of the above automatically creates a universal sending
 // class called "IRsend" containing only the protocols you want.
@@ -39,6 +38,8 @@ IRsend mySender;
 // VU TV remote codes is RC5 and codes toggle 10xx and 18xx when the button is pressed again
 #define BUTTON_INFO 0x100F
 #define BUTTON_INFO_REPEAT 0x180F
+#define BUTTON_RECALL 0x1022
+#define BUTTON_RECALL_REPEAT 0x1822
 #define BUTTON_OK 0x101B
 #define BUTTON_OK_REPEAT 0x181B
 #define BUTTON_2 0x1002 // 0x1802
@@ -93,23 +94,46 @@ void setup() {
   digitalWrite(pinLedAnode, HIGH);
   // identify the self device id and the mode of operation
   identifySelf();
-  Serial.println(F("Every time you press a key is a serial monitor we will send."));
+  if(MASTER_MODE)Serial.println("Every time you press a key in serial monitor monitoring using HB will be done.");
   //Enable auto resume and pass it the address of your extra buffer
   //myReceiver.enableAutoResume(myBuffer);
   myReceiver.enableIRIn(); // Start the receiver
-  Serial.println(F("Ready to receive IR signals"));
+  Serial.println("Ready to receive IR signals");
 }
 
 void loop() {
-  if (Serial.read() != -1) {
-    //send a code every time a character is received from the 
-    // serial port. You could modify this sketch to send when you
-    // push a button connected to an digital input pin.
-    //sendSignal();
-    monitorDevicesWithHB();
-    generateHBResponses();
+  if(MASTER_MODE){
+    if (Serial.read() != -1){
+      monitorDevicesWithHB();
+    } else {
+      Serial.println("Enter any character in the serial ");
+      delay(1000);
+    }
+  } else { // SLAVE_MODE
+    receiveSignal();    
   }
-  receiveSignal();
+}
+
+void processJIRSignals(unsigned long decodedValue){
+  JIRCode jIRCode;
+  Serial.print("processJIR Signals ");Serial.println(decodedValue, HEX);
+  jIRCode = decodeJIRFromIRDecoder(jIRCode, myDecoder);
+  if(jIRCode.destinationAddress != DEVICE_IDENTITY){
+    Serial.println("Addressed to someone else");
+    return;
+  }
+  switch(jIRCode.command){
+      case REQUEST_HB:
+        respondToHB(jIRCode.sourceAddress);
+        break;        
+      case RESPONSE_HB:
+        Serial.println("Recieved a heartbeat response to self");
+        break;
+      default:
+        //Serial.println("unknown signal");//Serial.println(decodedValue,HEX);
+        testEchoOfPreviousTransmittedCode(jIRCode.value);
+        break;
+  }
 }
 
 unsigned long previousTransmittedCode = 0;
@@ -141,7 +165,7 @@ unsigned long numOfHBResponsesReceived = 0;
 boolean receiveHBResponse(JIRCode& jPreviousTransmittedCode){
   JIRCode jIRCode;
   if(waitAndReceiveSignalAddressedToSelf(jIRCode, HB_RESPONSE_TIMEOUT)){
-    if(jIRCode.command == REQUEST_HB && jIRCode.sourceAddress == jPreviousTransmittedCode.destinationAddress){
+    if(jIRCode.command == RESPONSE_HB && jIRCode.sourceAddress == jPreviousTransmittedCode.destinationAddress){
       numOfHBResponsesReceived++;
       return true;
     }
@@ -199,7 +223,7 @@ boolean receiveSignalAddressedToTarget(JIRCode& jIRCode, byte destinationAddress
       Serial.println("Ready to receive IR signals");
       if(testEchoOfPreviousTransmittedCode(jIRCode.value)){
         Serial.print("Found echo signal "); Serial.println(jIRCode.value, HEX);
-        return false;        
+        return true;
       }
       if(jIRCode.protocolNum == NEC && (destinationAddress == ALL_ADDRESSES || jIRCode.destinationAddress == destinationAddress)){
         numOfSignalsReceivedToDestination++;
@@ -217,24 +241,15 @@ boolean receiveSignalAddressedToTarget(JIRCode& jIRCode, byte destinationAddress
 }
 
 
-void respondToHB(){
+void respondToHB(byte requestorAddress){
   unsigned long codeToSend = 0;
-  codeToSend = formatCodeForSendingResponse(i,REQUEST_HB,0x13);
+  codeToSend = formatCodeForSendingResponse(requestorAddress,RESPONSE_HB,0x13);
   mySender.send(NEC,codeToSend,32);
-}
-
-void generateHBResponses(){
-  unsigned long codeToSend = 0;
-  Serial.println(codeToSend, HEX);
-  for(int i=1; i<=MAX_NUMBER_OF_DEVICES; i++){
-    codeToSend = formatCodeForSendingResponse(i,REQUEST_HB,0x13);
-    Serial.print(i, DEC);Serial.print(" HB Response ");Serial.println(codeToSend, HEX);
-  }
 }
 
 int numOfSignalsSent = 0;
 void sendSignal(){
-  Serial.println(F("Sending signal"));
+  Serial.println("Sending signal");
   numOfSignalsSent++;
   //Substitute values and protocols in the following statement
   // for device you have available.
@@ -270,7 +285,7 @@ void sendSignal(){
   delay(500);
   mySender.send(RC5,0x181B, 13);//VU TV ok A8BCA, 13 bits
   receiveSignal();
-  Serial.print(F("Sent signal "));  Serial.println(numOfSignalsSent, DEC);
+  Serial.print("Sent signal ");  Serial.println(numOfSignalsSent, DEC);
 }
 
 unsigned long currentIRCode = 0;
@@ -278,18 +293,23 @@ void receiveSignal() {
   currentIRCode = 0;
   if (myReceiver.getResults()) {
     numOfSignalsReceived++;
-    Serial.print(F("numOfSignalsReceived is ")); Serial.println(numOfSignalsReceived, DEC);
-    Serial.println(F("decoding signal"));
+    Serial.print("numOfSignalsReceived is "); Serial.println(numOfSignalsReceived, DEC);
+    //Serial.println("decoding signal");
     if(myDecoder.decode()) {
       //myDecoder.dumpResults(true);  //Now print results. Use false for less detail
       currentIRCode = myDecoder.value;
       myReceiver.enableIRIn();      //Restart receiver
-      Serial.println(F("enabled receiver after decoding"));
-      Serial.print(F("Recvd signal "));Serial.println(currentIRCode,HEX);
+      Serial.println("enabled receiver after decoding");
+      Serial.print("Recvd signal ");Serial.println(currentIRCode,HEX);
+      if(myDecoder.protocolNum == NEC){
+        //Serial.print("Found our system related IR signal");
+        processJIRSignals(currentIRCode);
+        return;
+      }
       switch(currentIRCode) {
         case HEARTBEAT_REQUEST:
-        case BUTTON_INFO:
-        case BUTTON_INFO_REPEAT:
+        case BUTTON_RECALL:
+        case BUTTON_RECALL_REPEAT:
         case BUTTON_RED_CHNL_MINUS:
         case BUTTON_GREEN_PREV:
         case BUTTON_BLUE_MINUS:
@@ -300,13 +320,14 @@ void receiveSignal() {
           processHeartBeatResponse();
           break;
         default:
-          //Serial.println(F("unknown signal"));//Serial.println(decodedValue,HEX);
+          //Serial.println("unknown signal");//Serial.println(decodedValue,HEX);
           testEchoOfPreviousTransmittedCode(currentIRCode);
           break;
       }
+      Serial.println("Finished switch");
     } else {
       myReceiver.enableIRIn();      //Restart receiver
-      Serial.println(F("enabled receiver decode failed"));
+      Serial.println("enabled receiver decode failed");
     }
   }
 }
@@ -330,7 +351,7 @@ int numOfHeartBeatResponses = 0;
 void processHeartBeatResponse(){//int receivedCode){
   numOfHeartBeatResponses++;
   // the receivedCode can be checked to see if this a self response or not
-  Serial.print(F("HB response received "));Serial.println(numOfHeartBeatResponses, DEC);
+  Serial.print("HB response received ");Serial.println(numOfHeartBeatResponses, DEC);
 }
 
 // this will represent the identity of the device
@@ -339,8 +360,8 @@ void identifySelf(){
   int sensorVal = HIGH;
   //read the master mode pin, print out the mode
   sensorVal = digitalRead(pinMasterMode);
-  if(sensorVal == LOW) {MASTER_MODE = true; Serial.println(F("MASTER"));}
-  else {MASTER_MODE = false; Serial.println(F("SLAVE"));}
+  if(sensorVal == LOW) {MASTER_MODE = true; Serial.print("MASTER ");}
+  else {MASTER_MODE = false; Serial.print("SLAVE ");}
   //read the pin values into a variable
   //print out the color of value
   sensorVal = digitalRead(pinLedRed);
@@ -370,7 +391,7 @@ void identifySelf(){
     DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFE;
     Serial.print("-");
   }
-  Serial.println("");Serial.print(DEVICE_IDENTITY,BIN);Serial.println("");
+  Serial.print(" ");Serial.println(DEVICE_IDENTITY,BIN);
 }
 
 int numOfHeartBeatRequests = 0;
@@ -378,12 +399,12 @@ int previousState = BUTTON_OK;
 void respondHeartBeatRequest(){
   numOfHeartBeatRequests++;
   // the receivedCode can be checked to see if this the device to respond
-  identifySelf();
+  //identifySelf();
   extractDataParts(currentIRCode);
-  if( 
-    (currentIRCode == BUTTON_RED_CHNL_MINUS && currentLedColor == pinLedRed) ||
-    (currentIRCode == BUTTON_GREEN_PREV && currentLedColor == pinLedGreen) ||
-    (currentIRCode == BUTTON_BLUE_MINUS && currentLedColor == pinLedBlue) ){
+  if( (currentIRCode == BUTTON_RED_CHNL_MINUS && currentLedColor == pinLedRed) ||
+      (currentIRCode == BUTTON_GREEN_PREV && currentLedColor == pinLedGreen) ||
+      (currentIRCode == BUTTON_BLUE_MINUS && currentLedColor == pinLedBlue) 
+    ){
       if(previousState == BUTTON_OK) previousState = BUTTON_OK_REPEAT; else previousState = BUTTON_OK;
       Serial.print("HB requests ");Serial.print(numOfHeartBeatRequests, DEC);Serial.print(" response send ");Serial.println(previousState, HEX);
       mySender.send(RC5, previousState, 0);
@@ -462,7 +483,7 @@ JIRCode& initializeJIRCode(JIRCode& jIrCode, unsigned int protocolNum, unsigned 
   jIrCode.sourceAddress = sourceAddress;
   jIrCode.command = command; 
   jIrCode.parameterData = parameterData;
-  printSerialJIRCode(jIrCode);
+  //printSerialJIRCode(jIrCode);
   return jIrCode;
 }
 
@@ -475,7 +496,7 @@ JIRCode& decodeJIRFromIRDecoder(JIRCode& jIrCode, IRdecode& decoder){
   jIrCode.sourceAddress = lowByte(shiftedDecodedValue);
   jIrCode.command = highByte(jIrCode.value);
   jIrCode.parameterData = lowByte(jIrCode.value);
-  printSerialJIRCode(jIrCode);
+  //printSerialJIRCode(jIrCode);
   return jIrCode;
 }
 
