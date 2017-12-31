@@ -103,7 +103,8 @@ void setup() {
 
 void loop() {
   processSerialCommands();
-  deviceMonitoring();
+  if(MASTER_MODE) deviceMonitoring();
+  else processIRSignals();
 }
 
 /* State machine
