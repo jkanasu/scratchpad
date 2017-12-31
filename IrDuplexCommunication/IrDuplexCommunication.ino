@@ -103,6 +103,69 @@ void setup() {
 
 void loop() {
   processSerialCommands();
+  deviceMonitoring();
+}
+
+/* State machine
+ *  
+ */
+#define HB_NOT_SENT 0
+#define HB_REQUEST_SENT 10
+#define HB_RESPONSE_WAITING 20
+#define HB_RESPONSE_TIMEOUT 30
+#define HB_RESPONSE_RECEIVED 40
+#define HB_FAILED 50
+#define HB_SUCCESS 60
+typedef struct{
+  //byte deviceId; // Should this be here or outside?? :-(
+  byte hbStatus = HB_NOT_SENT;
+  unsigned long lastEventTime = 0;
+} DeviceHBStatus;
+#define HB_INTERVAL 10000 // 10 seconds 
+#define HB_TIMEOUT_PERIOD 2000 // 2 second
+#define MAX_NUMBER_OF_DEVICES 4
+DeviceHBStatus hbStatusOfDevices[MAX_NUMBER_OF_DEVICES+1];
+byte gCurrentDeviceId = 1; // indexing can all go wrong keep note
+void deviceMonitoring(){
+  if(gCurrentDeviceId>MAX_NUMBER_OF_DEVICES) {
+    gCurrentDeviceId = 1;
+    Serial.println(F("Restarting from beginning"));
+  }
+  DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[gCurrentDeviceId];
+  if(currentDeviceStatus.hbStatus == HB_NOT_SENT){
+    sendHBRequest(gCurrentDeviceId);
+    currentDeviceStatus.hbStatus = HB_RESPONSE_WAITING;
+    currentDeviceStatus.lastEventTime = millis();
+    //Serial.print(F("HB request sent "));Serial.println(gCurrentDeviceId, DEC);
+    return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
+    // someone else is expected to change this status
+    // how long are we waiting?
+    unsigned long waitingTime = findElapsedTimeInMillis(currentDeviceStatus.lastEventTime);//millis() - currentDeviceStatus.lastEventTime;
+    if(waitingTime > HB_TIMEOUT_PERIOD){
+      // donot put any delay here, the main loop() may need that time to do some work
+      currentDeviceStatus.hbStatus = HB_FAILED;
+      Serial.print(F("HB timedout "));Serial.println(gCurrentDeviceId, DEC);
+      return;
+    }
+    processIRSignals();
+    return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_FAILED){
+    Serial.print(F("HB Failed "));Serial.println(gCurrentDeviceId, DEC);
+    currentDeviceStatus.hbStatus = HB_NOT_SENT;
+    gCurrentDeviceId++;
+    return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_SUCCESS){
+    Serial.print(F("HB succeeded "));Serial.println(gCurrentDeviceId, DEC);
+    currentDeviceStatus.hbStatus = HB_NOT_SENT;
+    gCurrentDeviceId++;
+    //unsigned long lastHBActivityTime = findElapsedTimeInMillis(currentDeviceStatus.lastEventTime);//millis() - currentDeviceStatus.lastEventTime;
+    return;
+  }
+  Serial.print(F("HB status "));Serial.println(currentDeviceStatus.hbStatus, DEC);
 }
 
 void processSerialCommands(){
@@ -125,8 +188,6 @@ void processSerialCommands(){
   }
 }
 
-#define MAX_NUMBER_OF_DEVICES 4
-byte gCurrentDeviceId = 1;
 void processSerialSendRequest(){
   sendHBRequest(gCurrentDeviceId);
   gCurrentDeviceId++;
@@ -134,6 +195,10 @@ void processSerialSendRequest(){
 }
 
 void processSerialReceiveRequest(){
+  processIRSignals();
+}
+
+void processIRSignals(){
   JIRCode jIrCode;
   boolean isValid = receiveValidJIRSignal(jIrCode);
   if(isValid){
@@ -147,6 +212,7 @@ void sendHBRequest(byte currentDeviceId){
   unsigned long hbRequestCode = formatCodeForSendingRequest(currentDeviceId,REQUEST_HB,HB_REQUEST_CODE_PARAMS);
   mySender.send(NEC,hbRequestCode,32);
   Serial.print(F("HB Request Signal sent "));Serial.println(hbRequestCode, HEX);
+  //delay(1000);
 }
 
 #define HB_RESPONSE_CODE_PARAMS 0x00
@@ -156,6 +222,18 @@ void sendHBResponse(byte requestingDeviceId){
   Serial.print(F("HB Response Signal sent "));Serial.println(hbResponseCode, HEX);
 }
 
+void processHBResponse(JIRCode& jIrCode){
+  Serial.print(F("HB Response Signal received "));Serial.println(jIrCode.sourceAddress, DEC);
+  if(jIrCode.sourceAddress>MAX_NUMBER_OF_DEVICES) return;
+  DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[jIrCode.sourceAddress];
+  if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
+    currentDeviceStatus.hbStatus = HB_SUCCESS;
+    currentDeviceStatus.lastEventTime = millis();
+  } else {
+     Serial.print(F("HB Status is not correct "));Serial.println(currentDeviceStatus.hbStatus, DEC);
+  }
+}
+
 void processJIRSignals(JIRCode& jIrCode){
   //Serial.println(F("processJIR Signals "));
   jIrCode = convertToJIRCodeFromRawDecodedValue(jIrCode);
@@ -163,6 +241,7 @@ void processJIRSignals(JIRCode& jIrCode){
     processJIRSignalsAddressedToOthers(jIrCode);
     return;
   }
+  // Below assumes the IR signal is addressed to self
   switch(jIrCode.command){
     case REQUEST_HB:
       Serial.print(F("HB request from ")); Serial.println(jIrCode.sourceAddress);
@@ -170,6 +249,7 @@ void processJIRSignals(JIRCode& jIrCode){
       break;        
     case RESPONSE_HB:
       Serial.print(F("HB response from ")); Serial.println(jIrCode.sourceAddress);
+      processHBResponse(jIrCode);
       break;
     default:
       Serial.print(F("unknown signal ")); Serial.println(jIrCode.value,HEX);
@@ -179,7 +259,7 @@ void processJIRSignals(JIRCode& jIrCode){
 }
 
 void processJIRSignalsAddressedToOthers(JIRCode& jIrCode){
-    Serial.print(F("processJIRSignalsAddressedToOthers Addressed to ")); Serial.println(jIrCode.destinationAddress);
+    //Serial.print(F("processJIRSignalsAddressedToOthers Addressed to ")); Serial.println(jIrCode.destinationAddress);
 }
 
 #define FORCED_DELAY_TO_DEBOUNCE_SIGNALS 100 // milliSeconds
@@ -290,7 +370,7 @@ unsigned long formatCodeForSending(boolean typeOfSignal, byte destinationAddress
   retVal = retVal << 8;
   //Serial.println(retVal, HEX); 
   retVal = retVal | commandParams;
-  Serial.println(retVal, HEX);
+  //Serial.println(retVal, HEX);
   return retVal;
 }
 
@@ -326,10 +406,23 @@ void printSerialJIRCode(JIRCode& jIrCode){
   Serial.print(jIrCode.command,HEX);Serial.print(F("-"));Serial.println(jIrCode.parameterData,HEX);
 }
 
+unsigned long findElapsedTimeInMillis(unsigned long& lastEventTime){
+  unsigned long retVal;
+  unsigned long currentTime = millis();
+  retVal = currentTime - lastEventTime;
+  if(retVal < 0 ) {
+    retVal = (0xFFFFFFFE - lastEventTime) + currentTime;
+  }
+  return retVal;
+}
+
 /* Important points to note
  *  
  *  1. Always use the F macro in Serial.print - https://www.baldengineer.com/arduino-f-macro.html
  *  2. IRLib is generating bouncing values when the delay is less between getResults and enableIRIn
- *      for RC5 it generate same value twice and for NEC it is generating a repeat sequence FFFFFFFF 
+ *      for RC5 it generate same value twice and for NEC it is generating a repeat sequence FFFFFFFF
+ *  3. Packet collisions are not taken care. This is really a Master-Slave mode operation, only when the Master asks for, the slave responds.
+ *     Master - Slave role determination is through the hardware settings in each device.
+ *     Never set the hardware to have more than one Master
  *  
  */
