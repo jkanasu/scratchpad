@@ -73,25 +73,10 @@ typedef struct{
 
 unsigned int DEVICE_IDENTITY=0;
 boolean MASTER_MODE=false;
-#define pinMasterMode   7
-
-#define pinLedRed      11
-#define pinLedAnode    10
-#define pinLedGreen     9
-#define pinLedBlue      8
 
 void setup() {
   Serial.begin(9600);
   delay(2000); while (!Serial); //delay for Leonardo
-  //to identify the MASTER_MODE or SLAVE_MODE, configure pin as an input and enable the internal pull-up resistor
-  pinMode(pinMasterMode, INPUT_PULLUP);
-  //to identify the DEVICE configure pins as input and enable the internal pull-up resistor
-  pinMode(pinLedRed, INPUT_PULLUP);
-  pinMode(pinLedGreen, INPUT_PULLUP);
-  pinMode(pinLedBlue, INPUT_PULLUP);
-  //configure pin as power for led, Let this be high initially supplying power to the LED
-  pinMode(pinLedAnode, OUTPUT);
-  digitalWrite(pinLedAnode, HIGH);
   // identify the self device id and the mode of operation
   identifySelf();
   if(MASTER_MODE)Serial.println(F("Every time you press a key in serial monitor monitoring using HB will be done."));
@@ -127,6 +112,7 @@ typedef struct{
 #define MAX_NUMBER_OF_DEVICES 4
 DeviceHBStatus hbStatusOfDevices[MAX_NUMBER_OF_DEVICES+1];
 byte gCurrentDeviceId = 1; // indexing can all go wrong keep note
+unsigned long gHBsignalNumber = 0;
 void deviceMonitoring(){
   if(gCurrentDeviceId>MAX_NUMBER_OF_DEVICES) {
     gCurrentDeviceId = 1;
@@ -134,6 +120,7 @@ void deviceMonitoring(){
   }
   DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[gCurrentDeviceId];
   if(currentDeviceStatus.hbStatus == HB_NOT_SENT){
+    gHBsignalNumber++;
     sendHBRequest(gCurrentDeviceId);
     currentDeviceStatus.hbStatus = HB_RESPONSE_WAITING;
     currentDeviceStatus.lastEventTime = millis();
@@ -185,6 +172,7 @@ void processSerialCommands(){
       break;
     default:
       Serial.print(F("Unknown serial signal ")); Serial.print(inComingCommand,DEC);Serial.print(F("-"));Serial.println(inComingCommand,HEX);
+      identifySelf();
       break;
   }
 }
@@ -210,15 +198,15 @@ void processIRSignals(){
 
 #define HB_REQUEST_CODE_PARAMS 0x00
 void sendHBRequest(byte currentDeviceId){
-  unsigned long hbRequestCode = formatCodeForSendingRequest(currentDeviceId,REQUEST_HB,HB_REQUEST_CODE_PARAMS);
+  unsigned long hbRequestCode = formatCodeForSendingRequest(currentDeviceId,REQUEST_HB,gHBsignalNumber);
   mySender.send(NEC,hbRequestCode,32);
   Serial.print(F("HB Request Signal sent "));Serial.println(hbRequestCode, HEX);
   //delay(1000);
 }
 
 #define HB_RESPONSE_CODE_PARAMS 0x00
-void sendHBResponse(byte requestingDeviceId){
-  unsigned long hbResponseCode = formatCodeForSendingResponse(requestingDeviceId,RESPONSE_HB,HB_RESPONSE_CODE_PARAMS);
+void sendHBResponse(JIRCode& jIrCode){
+  unsigned long hbResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_HB,jIrCode.parameterData);
   mySender.send(NEC,hbResponseCode,32);
   Serial.print(F("HB Response Signal sent "));Serial.println(hbResponseCode, HEX);
 }
@@ -246,7 +234,7 @@ void processJIRSignals(JIRCode& jIrCode){
   switch(jIrCode.command){
     case REQUEST_HB:
       Serial.print(F("HB request from ")); Serial.println(jIrCode.sourceAddress);
-      sendHBResponse(jIrCode.sourceAddress);
+      sendHBResponse(jIrCode);
       break;        
     case RESPONSE_HB:
       Serial.print(F("HB response from ")); Serial.println(jIrCode.sourceAddress);
@@ -290,46 +278,6 @@ boolean receiveValidJIRSignal(JIRCode& jIRCode){
     myReceiver.enableIRIn();      //Immediately Restart receiver, the debug print is long afterwards
   }
   return retVal;
-}
-
-// this will represent the identity of the device
-int currentLedColor = 0;
-void identifySelf(){
-  int sensorVal = HIGH;
-  //read the master mode pin, print out the mode
-  sensorVal = digitalRead(pinMasterMode);
-  if(sensorVal == LOW) {MASTER_MODE = true; Serial.print("MASTER ");}
-  else {MASTER_MODE = false; Serial.print("SLAVE ");}
-  //read the pin values into a variable
-  //print out the color of value
-  sensorVal = digitalRead(pinLedRed);
-  if (sensorVal == LOW) {
-    DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0004;
-    currentLedColor = pinLedRed;
-    Serial.print("R");
-  } else {
-    DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFB;
-    Serial.print("-");
-  }
-  sensorVal = digitalRead(pinLedGreen);
-  if (sensorVal == LOW) {
-    DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0002;
-    currentLedColor = pinLedGreen;
-    Serial.print("G");
-  } else {
-    DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFD;
-    Serial.print("-");
-  }
-  sensorVal = digitalRead(pinLedBlue);
-  if (sensorVal == LOW) {
-    DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0001;
-    currentLedColor = pinLedBlue;
-    Serial.print("B");
-  } else {
-    DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFE;
-    Serial.print("-");
-  }
-  Serial.print(" ");Serial.println(DEVICE_IDENTITY,BIN);
 }
 
 // this is used to blink the identity led
@@ -415,6 +363,54 @@ unsigned long findElapsedTimeInMillis(unsigned long& lastEventTime){
     retVal = (0xFFFFFFFE - lastEventTime) + currentTime;
   }
   return retVal;
+}
+
+#define pinMasterMode  A5
+
+#define pinLedRed      A0
+#define pinLedGreen    A1
+#define pinLedBlue     A2
+#define pinLedYellow   A3
+
+#define VALUE_TO_CHECK LOW // Set this to HIGH if you are using a common cathode LED
+
+void identifySelf(){
+  //to identify the MASTER_MODE or SLAVE_MODE, configure pin as an input and enable the internal pull-up resistor
+  pinMode(pinMasterMode, INPUT_PULLUP);
+  //to identify the DEVICE configure pins as input and enable the internal pull-up resistor
+  pinMode(pinLedRed, INPUT_PULLUP);
+  pinMode(pinLedGreen, INPUT_PULLUP);
+  pinMode(pinLedBlue, INPUT_PULLUP);
+  pinMode(pinLedYellow, INPUT_PULLUP);
+  // identify the self device id and the mode of operation
+  int sensorVal = HIGH;
+  //read the master mode pin, print out the mode
+  sensorVal = digitalRead(pinMasterMode);
+  if(sensorVal == LOW) {MASTER_MODE = true;}
+  else {MASTER_MODE = false;}
+  //read the pin values into a variable
+  sensorVal = digitalRead(pinLedRed);
+  if (sensorVal == VALUE_TO_CHECK) { DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0008; }
+  else { DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFF7; }
+  sensorVal = digitalRead(pinLedGreen);
+  if (sensorVal == VALUE_TO_CHECK) { DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0004; }
+  else { DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFB; }
+  sensorVal = digitalRead(pinLedBlue);
+  if (sensorVal == VALUE_TO_CHECK) { DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0002; }
+  else { DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFD; }
+  sensorVal = digitalRead(pinLedYellow);
+  if (sensorVal == VALUE_TO_CHECK) { DEVICE_IDENTITY = DEVICE_IDENTITY | 0x0001; }
+  else { DEVICE_IDENTITY = DEVICE_IDENTITY & 0xFFFE; }
+  printIdentity();
+}
+
+void printIdentity(){
+  if(MASTER_MODE) Serial.print(F("MASTER")); else Serial.print(F("SLAVE"));
+  Serial.print(" 0x");Serial.print(DEVICE_IDENTITY,HEX); Serial.print(" Color ");
+  if (DEVICE_IDENTITY & 0x0008) Serial.print("R"); else Serial.print("-");
+  if (DEVICE_IDENTITY & 0x0004) Serial.print("G"); else Serial.print("-");
+  if (DEVICE_IDENTITY & 0x0002) Serial.print("B"); else Serial.print("-");
+  if (DEVICE_IDENTITY & 0x0001) Serial.println("Y"); else Serial.println("-");  
 }
 
 /* Important points to note
