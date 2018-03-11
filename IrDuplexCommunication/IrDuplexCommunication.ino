@@ -134,16 +134,17 @@ typedef struct{
   unsigned long lastEventTime = 0;
 } DeviceHBStatus;
 #define HB_INTERVAL 10000 // 10 seconds 
-#define HB_TIMEOUT_PERIOD 60000 // 2 second
+#define HB_TIMEOUT_PERIOD 2000 // 2 second
 #define MAX_NUMBER_OF_DEVICES 8
 DeviceHBStatus hbStatusOfDevices[MAX_NUMBER_OF_DEVICES+1];
 byte gCurrentDeviceId = 1; // indexing can all go wrong keep note
 unsigned long gHBsignalNumber = 0;
 unsigned long previousMonitoringCycleTime = millis();
-#define MONITORING_INTERVAL 2000 // 2 second
+#define MONITORING_INTERVAL 60000 // 2 second
 void deviceMonitoring(){
+  JAGI_LOG4(F("deviceMonitoring "), gCurrentDeviceId, F(" : "), hbStatusOfDevices[gCurrentDeviceId].hbStatus);
   if(gCurrentDeviceId>MAX_NUMBER_OF_DEVICES) {
-    if(!hasTimedOut(previousMonitoringCycleTime, HB_TIMEOUT_PERIOD )) return;
+    if(!hasTimedOut(previousMonitoringCycleTime, MONITORING_INTERVAL )) return;
     gCurrentDeviceId = 1;
     previousMonitoringCycleTime = millis();
     JAGI_LOG1(F("Restarting from beginning"));
