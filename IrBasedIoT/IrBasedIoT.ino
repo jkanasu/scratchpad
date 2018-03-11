@@ -8,6 +8,54 @@ SoftwareSerial DebugSerial(10, 11); // RX, TX
 #define JAGI_LOG1(pLast) {JAGI_LOG_TIME; JAGI_PRINT.println(pLast);}
 #define JAGI_LOG2(p1,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.println(pLast);}
 #define JAGI_LOG3(p1,p2,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.print(p2); JAGI_PRINT.println(pLast);}
+#define JAGI_LOG4(p1,p2,p3,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.print(p2); JAGI_PRINT.print(p3); JAGI_PRINT.println(pLast);}
+
+#include <RingBufCPP.h>
+
+unsigned int DEVICE_IDENTITY=0;
+boolean MASTER_MODE=false;
+
+typedef struct{
+  byte protocolNum;
+  unsigned long value;
+  // four bytes received from the 32 bit value from IR
+  byte destinationAddress = 0;
+  byte sourceAddress = 0;
+  byte command = 0;
+  byte parameterData = 0;
+} JIRCode;
+
+typedef struct {
+  byte protocolNum;
+  unsigned long timestamp;
+  unsigned long value;
+} NecIrSignal;
+#define MAX_NUM_NECSIGNALS_BUF 10
+//NECSIGNAL gIRSignalsNEC[MAX_NUM_NECSIGNALS];
+// Stack allocate the buffer to hold IR signals structs
+RingBufCPP<NecIrSignal, MAX_NUM_NECSIGNALS_BUF> buf;
+
+/* State machine
+ *  
+ */
+#define HB_NOT_SENT 0
+#define HB_REQUEST_SENT 10
+#define HB_RESPONSE_WAITING 20
+#define HB_RESPONSE_TIMEOUT 30
+#define HB_RESPONSE_RECEIVED 40
+#define HB_FAILED 50
+#define HB_SUCCESS 60
+typedef struct{
+  //byte deviceId; // Should this be here or outside?? :-(
+  byte hbStatus = HB_NOT_SENT;
+  unsigned long lastEventTime = 0;
+} DeviceHBStatus;
+#define HB_INTERVAL 10000 // 10 seconds 
+#define HB_TIMEOUT_PERIOD 2000 // 2 second
+#define MAX_NUMBER_OF_DEVICES 8
+DeviceHBStatus hbStatusOfDevices[MAX_NUMBER_OF_DEVICES+1];
+byte gCurrentDeviceId = 1; // indexing can all go wrong keep note
+unsigned long gHBsignalNumber = 0;
 
 #include <IRLibDecodeBase.h>
 #include <IRLibSendBase.h>    // First include the send base
@@ -32,6 +80,7 @@ IRdecode myDecoder;   //create decoder
 // NOTE this eats away 100 x 16 bits -- i.e. 200 bytes
 uint16_t myBuffer[RECV_BUF_LENGTH];
 
+
 /* Comment this out to disable prints and save space */
 #define BLYNK_PRINT DebugSerial
 
@@ -47,12 +96,12 @@ void setup()
   DebugSerial.begin(9600);
   // Blynk will work through Serial
   // Do not read or write this serial manually in your sketch
-  Serial.begin(9600);
+  Serial.begin(57600);
   Blynk.begin(Serial, auth);
   initializeLocalHardware();
   identifySelf();
   //Enable auto resume and pass it the address of your extra buffer
-  //myReceiver.enableAutoResume(myBuffer);
+  myReceiver.enableAutoResume(myBuffer);
   myReceiver.enableIRIn(); // Start the receiver
   BLYNK_LOG2(F("Done initializing "), F("jagi"));
 }
@@ -60,22 +109,11 @@ void setup()
 void loop()
 {
   Blynk.run();
-  receiveIRSignals();
+  processIRSignals();
+  //receiveIRSignals();
 }
 
-unsigned int DEVICE_IDENTITY=0;
-boolean MASTER_MODE=false;
 
-#include <RingBufCPP.h>
-typedef struct {
-  byte protocolNum;
-  unsigned long timestamp;
-  unsigned long value;
-} NecIrSignal;
-#define MAX_NUM_NECSIGNALS_BUF 10
-//NECSIGNAL gIRSignalsNEC[MAX_NUM_NECSIGNALS];
-// Stack allocate the buffer to hold IR signals structs
-RingBufCPP<NecIrSignal, MAX_NUM_NECSIGNALS_BUF> buf;
 
 // NEC is used for our system
 // COMMAND & RESPONSE differ in only the MSB value
@@ -96,8 +134,8 @@ boolean isWaitingForEcho = false;
 boolean isEchoReceived = false;
 boolean isReTransmissionRequired = false;
 #define ECHO_TIMEOUT_PERIOD 2000 // In milliseconds 125 // For NEC standard, the transmission period is upto 110 ms
-#define NUM_IRSIGNAL_MIN_RETRANSMITS 2
-#define NUM_IRSIGNAL_MAX_RETRANSMITS 4
+#define NUM_IRSIGNAL_MIN_RETRANSMITS 1
+#define NUM_IRSIGNAL_MAX_RETRANSMITS 2
 void sendIRSignals(unsigned long iRcode){
   BLYNK_LOG_TIME();JAGI_PRINT.print(F("Send raw Ir Signal "));JAGI_PRINT.println(iRcode, HEX);
   recentTransmitted = 0xFFFFFFFF;
@@ -129,10 +167,11 @@ void sendIRSignals(unsigned long iRcode){
       receiveIRSignals();
       if(isEchoReceived){
         //Serial.println(F("Echo Received"));
+        JAGI_LOG1(F("Echo Received"));
         break;
       }
       if(hasTimedOut(sendTimeStamp, ECHO_TIMEOUT_PERIOD)){
-        BLYNK_LOG1(F(" Echo Timed Out"));
+        JAGI_LOG1(F("Echo Timed Out"));
         isReTransmissionRequired = true;
         rawIRSignalsEchoFailed++;
         rawIRSignalsReTransmitted++;
@@ -143,6 +182,7 @@ void sendIRSignals(unsigned long iRcode){
       if(i < NUM_IRSIGNAL_MIN_RETRANSMITS) {
         isReTransmissionRequired = true;
         rawIRSignalsReTransmitted++;
+        JAGI_LOG2(F("Force Tx attempt "), i);
         //Serial.print(F("Force Tx attempt ")); Serial.println(i);
         //delay(200);// else we may simply collide with our selves, actually NO :-(
         continue;
@@ -174,6 +214,7 @@ void receiveIRSignals(){
       if(isWaitingForEcho && necIrSignal.value == recentTransmitted){
         isEchoReceived = true;
         isWaitingForEcho = false;
+        JAGI_LOG_TIME; JAGI_PRINT.print(F("Echo Received ")); JAGI_PRINT.println(necIrSignal.value, HEX); 
         //Serial.print(F("Echo Received ")); Serial.println(necIrSignal.value, HEX);
         goto enableReceiver;
       }
@@ -187,7 +228,7 @@ void receiveIRSignals(){
         }
       }
       if(!buf.add(necIrSignal)) {    // Add it to the buffer
-        BLYNK_LOG_TIME();JAGI_PRINT.print(F("Q failed "));JAGI_PRINT.println(necIrSignal.value, HEX);
+        JAGI_LOG_TIME;JAGI_PRINT.print(F("Q failed "));JAGI_PRINT.println(necIrSignal.value, HEX);
         rawIRSignalsDropped++;
       }
     } else { // This is an indication of possible collision or a simple hardware problem, hence re-transmit
@@ -202,6 +243,139 @@ void receiveIRSignals(){
     }
 enableReceiver:
     myReceiver.enableIRIn();      //Restart receiver
+    JAGI_LOG1(F("Enabling Receiver"));
+  }
+}
+
+void waitForDeviceResponse(byte currentDeviceId, byte command){
+  do{
+    processIRSignals();
+    monitorDevice(currentDeviceId);
+    JAGI_LOG3(currentDeviceId, F(" Still waiting "), hbStatusOfDevices[currentDeviceId].hbStatus);
+  }while (hbStatusOfDevices[currentDeviceId].hbStatus != HB_SUCCESS &&  hbStatusOfDevices[currentDeviceId].hbStatus != HB_FAILED );
+  JAGI_LOG3(currentDeviceId, F(" Finished waiting "), hbStatusOfDevices[currentDeviceId].hbStatus);
+}
+
+void monitorDevice(byte currentDeviceId){
+  DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[currentDeviceId];
+  if(currentDeviceStatus.hbStatus == HB_NOT_SENT){
+    gHBsignalNumber++;
+    sendHBRequest(currentDeviceId);
+    currentDeviceStatus.hbStatus = HB_RESPONSE_WAITING;
+    currentDeviceStatus.lastEventTime = millis();
+    JAGI_LOG2(F("HB_NOT_SENT to SENT "),currentDeviceId);
+    goto monitorDeviceWorkFinish;//return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
+    // someone else is expected to change this status
+    // how long are we waiting?
+    unsigned long waitingTime = findElapsedTimeInMillis(currentDeviceStatus.lastEventTime);//millis() - currentDeviceStatus.lastEventTime;
+    if(waitingTime > HB_TIMEOUT_PERIOD){
+      // donot put any delay here, the main loop() may need that time to do some work
+      currentDeviceStatus.hbStatus = HB_FAILED;
+      JAGI_LOG2(F("HB timedout "), currentDeviceId);
+      goto monitorDeviceWorkFinish;//return;
+    }
+    processIRSignals();
+    JAGI_LOG2(F("HB_RESPONSE_WAITING for "), currentDeviceId);
+    goto monitorDeviceWorkFinish;//return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_FAILED){
+    JAGI_LOG2(F("HB_FAILED "), currentDeviceId);
+    currentDeviceStatus.hbStatus = HB_NOT_SENT;
+    goto monitorDeviceWorkFinish;//return;
+  }
+  if(currentDeviceStatus.hbStatus == HB_SUCCESS){
+    JAGI_LOG2(F("HB_SUCCESS "), currentDeviceId);
+    currentDeviceStatus.hbStatus = HB_NOT_SENT;
+    //unsigned long lastHBActivityTime = findElapsedTimeInMillis(currentDeviceStatus.lastEventTime);//millis() - currentDeviceStatus.lastEventTime;
+    goto monitorDeviceWorkFinish;//return;
+  }
+monitorDeviceWorkFinish:
+  currentDeviceStatus.hbStatus;
+  //JAGI_LOG4(F("Monitor HB status "), currentDeviceId, F(" : "), currentDeviceStatus.hbStatus);
+}
+
+void processIRSignals(){
+  JIRCode jIrCode;
+  boolean isValid = receiveValidJIRSignal(jIrCode);
+  if(isValid){
+    JAGI_LOG_TIME; JAGI_PRINT.print(F("valid Signal received 0x"));JAGI_PRINT.println(jIrCode.value, HEX);
+    processJIRSignals(jIrCode);
+  }
+}
+
+void processJIRSignals(JIRCode& jIrCode){
+  JAGI_LOG1(F("processJIR Signals "));
+  jIrCode = convertToJIRCodeFromRawDecodedValue(jIrCode);
+  if(jIrCode.protocolNum != NEC || jIrCode.destinationAddress != DEVICE_IDENTITY){
+    processJIRSignalsAddressedToOthers(jIrCode);
+    return;
+  }
+  // Below assumes the IR signal is addressed to self
+  switch(jIrCode.command){
+    case REQUEST_HB:
+      JAGI_LOG2(F("HB request from "), jIrCode.sourceAddress);
+      sendHBResponse(jIrCode);
+      break;        
+    case RESPONSE_HB:
+      JAGI_LOG2(F("HB response from "), jIrCode.sourceAddress);
+      processHBResponse(jIrCode);
+      break;
+    default:
+      JAGI_LOG_TIME; JAGI_PRINT.print(F("unknown signal 0x")); JAGI_PRINT.println(jIrCode.value,HEX);
+      //testEchoOfPreviousTransmittedCode(jIrCode.value);
+      break;
+  }
+}
+
+void processJIRSignalsAddressedToOthers(JIRCode& jIrCode){
+    //Serial.print(F("processJIRSignalsAddressedToOthers Addressed to ")); Serial.println(jIrCode.destinationAddress);
+}
+
+#define FORCED_DELAY_TO_DEBOUNCE_SIGNALS 100 // milliSeconds
+unsigned long numOfChecksForIRSignal = 0;
+unsigned long numOfRawIRSignalsReceived = 0;
+unsigned long numOfRawValidIRSignalsReceived = 0;
+unsigned long numOfValidJIRSignalsReceived = 0;
+boolean receiveValidJIRSignal(JIRCode& jIRCode){
+  boolean retVal = false;
+  receiveIRSignals();
+  if(buf.isEmpty()) return retVal;
+  NecIrSignal necIrSignal;
+  if(!buf.pull(&necIrSignal)) return retVal;
+  jIRCode.protocolNum = necIrSignal.protocolNum;
+  jIRCode.value = necIrSignal.value;
+  retVal = true;
+  return retVal;
+}
+
+#define HB_REQUEST_CODE_PARAMS 0x00
+void sendHBRequest(byte currentDeviceId){
+  unsigned long hbRequestCode = formatCodeForSendingRequest(currentDeviceId,REQUEST_HB,gHBsignalNumber);
+  //mySender.send(NEC,hbRequestCode,32);
+  sendIRSignals(hbRequestCode);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Request Signal sent 0x"));JAGI_PRINT.println(hbRequestCode, HEX);
+  //delay(1000);
+}
+
+#define HB_RESPONSE_CODE_PARAMS 0x00
+void sendHBResponse(JIRCode& jIrCode){
+  unsigned long hbResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_HB,jIrCode.parameterData);
+  //mySender.send(NEC,hbResponseCode,32);
+  sendIRSignals(hbResponseCode);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Response Signal sent 0x"));JAGI_PRINT.println(hbResponseCode, HEX);
+}
+
+void processHBResponse(JIRCode& jIrCode){
+  JAGI_LOG2(F("HB Response Signal received "),jIrCode.sourceAddress);
+  if(jIrCode.sourceAddress>MAX_NUMBER_OF_DEVICES) return;
+  DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[jIrCode.sourceAddress];
+  if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
+    currentDeviceStatus.hbStatus = HB_SUCCESS;
+    currentDeviceStatus.lastEventTime = millis();
+  } else {
+     JAGI_LOG2(F("HB Status is not correct "), currentDeviceStatus.hbStatus);
   }
 }
 
@@ -261,12 +435,32 @@ unsigned long formatCodeForSending(boolean typeOfSignal, byte destinationAddress
   return retVal;
 }
 
+/* the method just initializes the other part of the JIRCode struct
+ *  parameters:
+ *  jIrCode the object which has to be initialized
+ *          assumes is already set with the protocolNum and value
+ */
+JIRCode& convertToJIRCodeFromRawDecodedValue(JIRCode& jIrCode){
+  unsigned int shiftedDecodedValue = jIrCode.value>>16;
+  jIrCode.destinationAddress = highByte(shiftedDecodedValue);
+  jIrCode.sourceAddress = lowByte(shiftedDecodedValue);
+  jIrCode.command = highByte(jIrCode.value);
+  jIrCode.parameterData = lowByte(jIrCode.value);
+  //printSerialJIRCode(jIrCode);
+  return jIrCode;
+}
+
+void printSerialJIRCode(JIRCode& jIrCode){
+  JAGI_LOG_TIME; JAGI_PRINT.print(jIrCode.protocolNum,DEC);JAGI_PRINT.print(F("-"));JAGI_PRINT.print(jIrCode.value,HEX);JAGI_PRINT.print(F("-"));
+  JAGI_PRINT.print(jIrCode.destinationAddress,HEX);JAGI_PRINT.print(F("-"));JAGI_PRINT.print(jIrCode.sourceAddress,HEX);JAGI_PRINT.print(F("-"));
+  JAGI_PRINT.print(jIrCode.command,HEX);JAGI_PRINT.print(F("-"));JAGI_PRINT.println(jIrCode.parameterData,HEX);
+}
+
 // Print the buffer's contents then empty it
 void print_buf_contents()
 {
-  NecIrSignal * e = 0;
-  JAGI_LOG1("\n______Peek contents of ring buffer_______");
-  // Keep looping until pull() returns NULL
+  NecIrSignal* e = 0;
+  JAGI_LOG1("______Peek contents of ring buffer_______");
   for (int i = 0 ; i<buf.numElements(); i++) {
     e = buf.peek(i);
     if(!e) break;
@@ -336,15 +530,13 @@ void identifySelf(){
 }
 
 void printIdentity(){
-  //if(MASTER_MODE) Serial.print(F("MASTER")); else Serial.print(F("SLAVE "));
-  //Serial.print(" 0x");Serial.print(DEVICE_IDENTITY,HEX); Serial.print(" Color ");
   char color[] = "----";
   if (DEVICE_IDENTITY & 0x0008) color[0] = 'R';
   if (DEVICE_IDENTITY & 0x0004) color[1] = 'G';
-  if (DEVICE_IDENTITY & 0x0002) color[2] = 'B';//Serial.print("B"); else Serial.print("-");
-  if (DEVICE_IDENTITY & 0x0001) color[3] = 'Y';//Serial.println("Y"); else Serial.println("-");
-  if(MASTER_MODE) {BLYNK_LOG4("MASTER ", DEVICE_IDENTITY, " Color ", color);}
-  else {BLYNK_LOG4("SLAVE  ", DEVICE_IDENTITY, " Color ", color);}
+  if (DEVICE_IDENTITY & 0x0002) color[2] = 'B';
+  if (DEVICE_IDENTITY & 0x0001) color[3] = 'Y';
+  if(MASTER_MODE) {JAGI_LOG4("MASTER ", DEVICE_IDENTITY, " Color ", color);}
+  else {JAGI_LOG4("SLAVE  ", DEVICE_IDENTITY, " Color ", color);}
 }
 
 
@@ -359,6 +551,8 @@ void initializeLocalHardware(){
   //if the pin is HIGH it means it is open, if it is grounded/LOW it means it is closed.
   pinMode(pinDoorState, INPUT_PULLUP);
 }
+
+
 // Below is for Red 0x8 V0,V1,V2,V3
 // This function is called when there is a Widget
 // which is writing data to Virtual Pin (0)
@@ -397,7 +591,7 @@ BLYNK_READ(V3)
   Blynk.virtualWrite(V3, temperatureSensorValue);//random(0,1000));
 }
 
-// Below is for Blue 0x4 V4,V5,V6,V7
+// Below is for Green 0x4 V4,V5,V6,V7
 // This function is called when there is a Widget
 // which is writing data to Virtual Pin (0)
 BLYNK_WRITE(V4)
@@ -405,8 +599,12 @@ BLYNK_WRITE(V4)
   // This command reads the value from Virtual Pin (0)
   //Blynk.virtualWrite(V1, millis() / 1000);
   int requiredLedState = param.asInt();
+  JAGI_LOG1(F("Start Manual Pinging device 4"));
   if(requiredLedState == 0) digitalWrite(LED_BUILTIN, LOW);   // turn the LED off (LOW is the voltage level)
   else digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
+  //monitorDevice(4);
+  waitForDeviceResponse(4,0);
+  JAGI_LOG2(F("End Manual Pinging device 4 -> "),hbStatusOfDevices[4].hbStatus);
 }
 
 // This function is called when there is a Widget
@@ -415,6 +613,10 @@ BLYNK_READ(V5)
 {
   // This command writes Arduino's uptime in seconds to Virtual Pin (5)
   Blynk.virtualWrite(V5, millis() / 1000);
+  JAGI_LOG1(F("Start Pinging device 4"));
+  //monitorDevice(4);
+  //waitForDeviceResponse(4,0);
+  BLYNK_LOG2(F("End Pinging device 4 -> "),hbStatusOfDevices[4].hbStatus);
 }
 
 BLYNK_READ(V6)
@@ -434,7 +636,7 @@ BLYNK_READ(V7)
   Blynk.virtualWrite(V7, temperatureSensorValue);//random(0,1000));
 }
 
-// Below is for Green 0x2 V8,V9,V10,V11
+// Below is for Red 0x8 V8,V9,V10,V11
 // This function is called when there is a Widget
 // which is writing data to Virtual Pin (0)
 BLYNK_WRITE(V8)
@@ -442,8 +644,12 @@ BLYNK_WRITE(V8)
   // This command reads the value from Virtual Pin (0)
   //Blynk.virtualWrite(V1, millis() / 1000);
   int requiredLedState = param.asInt();
+  BLYNK_LOG1(F("Start Pinging device 8"));
   if(requiredLedState == 0) digitalWrite(LED_BUILTIN, LOW);   // turn the LED off (LOW is the voltage level)
   else digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
+  monitorDevice(8);
+  //waitForDeviceResponse(8,0);
+  BLYNK_LOG1(F("End Pinging device 8"));
 }
 
 // This function is called when there is a Widget
