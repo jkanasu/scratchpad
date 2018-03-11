@@ -1,4 +1,15 @@
-// jagi has changed this script
+// Some times we cannot use the default Serial for debug/logs, hence we use SoftwareSerial
+// You could use a spare Hardware Serial on boards that have it (like Mega)
+//#include <SoftwareSerial.h>
+//SoftwareSerial DebugSerial(10, 11); // RX, TX
+
+#define JAGI_PRINT Serial // You can change this to use a Software Serial
+#define JAGI_LOG_TIME {JAGI_PRINT.print(F("[")); JAGI_PRINT.print(millis());JAGI_PRINT.print(F("] "));}
+#define JAGI_LOG1(pLast) {JAGI_LOG_TIME; JAGI_PRINT.println(pLast);}
+#define JAGI_LOG2(p1,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.println(pLast);}
+#define JAGI_LOG3(p1,p2,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.print(p2); JAGI_PRINT.println(pLast);}
+#define JAGI_LOG4(p1,p2,p3,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.print(p2); JAGI_PRINT.print(p3); JAGI_PRINT.println(pLast);}
+#define JAGI_LOG6(p1,p2,p3,p4,p5,pLast) {JAGI_LOG_TIME; JAGI_PRINT.print(p1); JAGI_PRINT.print(p2); JAGI_PRINT.print(p3); JAGI_PRINT.print(p4); JAGI_PRINT.print(p5); JAGI_PRINT.println(pLast);}
 
 #include <RingBufCPP.h>
 #include <IRLibDecodeBase.h>
@@ -85,15 +96,18 @@ typedef struct {
 RingBufCPP<NecIrSignal, MAX_NUM_NECSIGNALS_BUF> buf;
 
 void setup() {
+  // Debug console
+  //DebugSerial.begin(9600); // NOTE baud rate 9600
+
   Serial.begin(9600);
   delay(2000); while (!Serial); //delay for Leonardo
   // identify the self device id and the mode of operation
   identifySelf();
-  if(MASTER_MODE)Serial.println(F("Every time you press a key in serial monitor monitoring using HB will be done."));
+  if(MASTER_MODE)JAGI_LOG1(F("Every time you press a key in serial monitor monitoring using HB will be done."));
   //Enable auto resume and pass it the address of your extra buffer
   //myReceiver.enableAutoResume(myBuffer);
   myReceiver.enableIRIn(); // Start the receiver
-  Serial.println(F("Ready to receive IR signals"));
+  JAGI_LOG1(F("Ready to receive IR signals"));
 }
 
 boolean fullDetail=false;
@@ -101,6 +115,7 @@ void loop() {
   processSerialCommands();
   if(MASTER_MODE) deviceMonitoring();
   else processIRSignals();
+  //delay(1000);
 }
 
 /* State machine
@@ -119,18 +134,23 @@ typedef struct{
   unsigned long lastEventTime = 0;
 } DeviceHBStatus;
 #define HB_INTERVAL 10000 // 10 seconds 
-#define HB_TIMEOUT_PERIOD 2000 // 2 second
+#define HB_TIMEOUT_PERIOD 60000 // 2 second
 #define MAX_NUMBER_OF_DEVICES 8
 DeviceHBStatus hbStatusOfDevices[MAX_NUMBER_OF_DEVICES+1];
 byte gCurrentDeviceId = 1; // indexing can all go wrong keep note
 unsigned long gHBsignalNumber = 0;
+unsigned long previousMonitoringCycleTime = millis();
+#define MONITORING_INTERVAL 2000 // 2 second
 void deviceMonitoring(){
   if(gCurrentDeviceId>MAX_NUMBER_OF_DEVICES) {
+    if(!hasTimedOut(previousMonitoringCycleTime, HB_TIMEOUT_PERIOD )) return;
     gCurrentDeviceId = 1;
-    Serial.println(F("Restarting from beginning"));
+    previousMonitoringCycleTime = millis();
+    JAGI_LOG1(F("Restarting from beginning"));
   }
   monitorDevice(gCurrentDeviceId);
-  Serial.print(F("Device Status ")); Serial.print(gCurrentDeviceId); Serial.print(F(" : "));Serial.println(hbStatusOfDevices[gCurrentDeviceId].hbStatus); 
+  JAGI_LOG4(F("Device Status "), gCurrentDeviceId, F(" : "), hbStatusOfDevices[gCurrentDeviceId].hbStatus);
+  //JAGI_PRINT.print(F("Device Status ")); JAGI_PRINT.print(gCurrentDeviceId); JAGI_PRINT.print(F(" : "));JAGI_PRINT.println(hbStatusOfDevices[gCurrentDeviceId].hbStatus); 
   if(hbStatusOfDevices[gCurrentDeviceId].hbStatus == HB_SUCCESS ||
   hbStatusOfDevices[gCurrentDeviceId].hbStatus == HB_FAILED){
     gCurrentDeviceId++;
@@ -144,7 +164,7 @@ void monitorDevice(byte currentDeviceId){
     sendHBRequest(currentDeviceId);
     currentDeviceStatus.hbStatus = HB_RESPONSE_WAITING;
     currentDeviceStatus.lastEventTime = millis();
-    Serial.print(F("HB request sent "));Serial.println(currentDeviceId, DEC);
+    JAGI_LOG2(F("HB request sent "), currentDeviceId);
     goto monitorDeviceWorkFinish;//return;
   }
   if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
@@ -154,32 +174,33 @@ void monitorDevice(byte currentDeviceId){
     if(waitingTime > HB_TIMEOUT_PERIOD){
       // donot put any delay here, the main loop() may need that time to do some work
       currentDeviceStatus.hbStatus = HB_FAILED;
-      Serial.print(F("HB timedout "));Serial.println(currentDeviceId, DEC);
+      JAGI_LOG2(F("HB timedout "), currentDeviceId);
       goto monitorDeviceWorkFinish;//return;
     }
     processIRSignals();
     goto monitorDeviceWorkFinish;//return;
   }
   if(currentDeviceStatus.hbStatus == HB_FAILED){
-    Serial.print(F("HB fail "));Serial.println(currentDeviceId, DEC);
+    JAGI_LOG2(F("HB fail "), currentDeviceId);
     currentDeviceStatus.hbStatus = HB_NOT_SENT;
     goto monitorDeviceWorkFinish;//return;
   }
   if(currentDeviceStatus.hbStatus == HB_SUCCESS){
-    Serial.print(F("HB success "));Serial.println(currentDeviceId, DEC);
+    JAGI_LOG2(F("HB success "), currentDeviceId);
     currentDeviceStatus.hbStatus = HB_NOT_SENT;
     //unsigned long lastHBActivityTime = findElapsedTimeInMillis(currentDeviceStatus.lastEventTime);//millis() - currentDeviceStatus.lastEventTime;
     goto monitorDeviceWorkFinish;//return;
   }
 monitorDeviceWorkFinish:
-  Serial.print(F("Monitor HB status "));Serial.print(currentDeviceId, DEC); Serial.print(F(" : "));Serial.println(currentDeviceStatus.hbStatus, DEC);
+  currentDeviceStatus.hbStatus;
+  JAGI_LOG4(F("Monitor HB status "), currentDeviceId, F(" : "), currentDeviceStatus.hbStatus);
 }
 
 void processSerialCommands(){
-  if (Serial.available() == 0) return;
-  int inComingCommand = Serial.read();
+  if (JAGI_PRINT.available() == 0) return;
+  int inComingCommand = JAGI_PRINT.read();
   if (inComingCommand == -1) return;
-  //Serial.print(F("command received "));Serial.println(inComingCommand, DEC);
+  JAGI_LOG2(F("command received "), inComingCommand);
   switch(inComingCommand){
     case 49: // 1 in ascii
       processSerial1();
@@ -208,21 +229,21 @@ void processSerialCommands(){
       processSerialF();
       break;
     default:
-      Serial.print(F("Unknown serial signal ")); Serial.print(inComingCommand,DEC);Serial.print(F("-"));Serial.println(inComingCommand,HEX);
+      JAGI_LOG_TIME;JAGI_PRINT.print(F("Unknown serial signal ")); JAGI_PRINT.print(inComingCommand,DEC);JAGI_PRINT.print(F("-"));JAGI_PRINT.println(inComingCommand,HEX);
       processSerialX();
       break;
   }
 }
 
 void processSerial1(){
-  Serial.println(F("Send signal"));
+  JAGI_LOG1(F("Send signal"));
   sendHBRequest(gCurrentDeviceId);
   gCurrentDeviceId++;
   if(gCurrentDeviceId > MAX_NUMBER_OF_DEVICES) gCurrentDeviceId=1;
 }
 
 void processSerial2(){
-  Serial.println(F("Receive signal"));
+  JAGI_LOG1(F("Receive signal"));
   processIRSignals();
 }
 
@@ -239,12 +260,12 @@ void processSerialE(){
 }
 
 void processSerialF(){
-  Serial.println(F("Change dump level"));
+  JAGI_LOG1(F("Change dump level"));
   fullDetail = (!fullDetail);
 }
 
 void processSerialX(){
-  Serial.println(F("Print Stats"));
+  JAGI_LOG1(F("Print Stats"));
   printIrSignalStats();
 }
 
@@ -252,7 +273,7 @@ void processIRSignals(){
   JIRCode jIrCode;
   boolean isValid = receiveValidJIRSignal(jIrCode);
   if(isValid){
-    Serial.print(F("valid Signal received "));Serial.println(jIrCode.value, HEX);
+    JAGI_LOG_TIME;JAGI_PRINT.print(F("valid Signal received 0x"));JAGI_PRINT.println(jIrCode.value, HEX);
     processJIRSignals(jIrCode);
   }
 }
@@ -262,7 +283,7 @@ void sendHBRequest(byte currentDeviceId){
   unsigned long hbRequestCode = formatCodeForSendingRequest(currentDeviceId,REQUEST_HB,gHBsignalNumber);
   //mySender.send(NEC,hbRequestCode,32);
   sendIRSignals(hbRequestCode);
-  Serial.print(F("HB Request Signal sent "));Serial.println(hbRequestCode, HEX);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Request Signal sent 0x"));JAGI_PRINT.println(hbRequestCode, HEX);
   //delay(1000);
 }
 
@@ -271,23 +292,23 @@ void sendHBResponse(JIRCode& jIrCode){
   unsigned long hbResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_HB,jIrCode.parameterData);
   //mySender.send(NEC,hbResponseCode,32);
   sendIRSignals(hbResponseCode);
-  Serial.print(F("HB Response Signal sent "));Serial.println(hbResponseCode, HEX);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Response Signal sent 0x"));JAGI_PRINT.println(hbResponseCode, HEX);
 }
 
 void processHBResponse(JIRCode& jIrCode){
-  Serial.print(F("HB Response Signal received "));Serial.println(jIrCode.sourceAddress, DEC);
+  JAGI_LOG2(F("HB Response Signal received "), jIrCode.sourceAddress);
   if(jIrCode.sourceAddress>MAX_NUMBER_OF_DEVICES) return;
   DeviceHBStatus& currentDeviceStatus = hbStatusOfDevices[jIrCode.sourceAddress];
   if(currentDeviceStatus.hbStatus == HB_RESPONSE_WAITING){
     currentDeviceStatus.hbStatus = HB_SUCCESS;
     currentDeviceStatus.lastEventTime = millis();
   } else {
-     Serial.print(F("HB Status is not correct "));Serial.println(currentDeviceStatus.hbStatus, DEC);
+     JAGI_LOG2(F("HB Status is not correct "), currentDeviceStatus.hbStatus);
   }
 }
 
 void processJIRSignals(JIRCode& jIrCode){
-  Serial.println(F("processJIR Signals "));
+  JAGI_LOG1(F("processJIR Signals "));
   jIrCode = convertToJIRCodeFromRawDecodedValue(jIrCode);
   if(jIrCode.protocolNum != NEC || jIrCode.destinationAddress != DEVICE_IDENTITY){
     processJIRSignalsAddressedToOthers(jIrCode);
@@ -296,22 +317,22 @@ void processJIRSignals(JIRCode& jIrCode){
   // Below assumes the IR signal is addressed to self
   switch(jIrCode.command){
     case REQUEST_HB:
-      Serial.print(F("HB request from ")); Serial.println(jIrCode.sourceAddress);
+      JAGI_LOG2(F("HB request from "), jIrCode.sourceAddress);
       sendHBResponse(jIrCode);
       break;        
     case RESPONSE_HB:
-      Serial.print(F("HB response from ")); Serial.println(jIrCode.sourceAddress);
+      JAGI_LOG2(F("HB response from "), jIrCode.sourceAddress);
       processHBResponse(jIrCode);
       break;
     default:
-      Serial.print(F("unknown signal ")); Serial.println(jIrCode.value,HEX);
+      JAGI_LOG_TIME;JAGI_PRINT.print(F("unknown signal 0x")); JAGI_PRINT.println(jIrCode.value,HEX);
       //testEchoOfPreviousTransmittedCode(jIrCode.value);
       break;
   }
 }
 
 void processJIRSignalsAddressedToOthers(JIRCode& jIrCode){
-    //Serial.print(F("processJIRSignalsAddressedToOthers Addressed to ")); Serial.println(jIrCode.destinationAddress);
+    JAGI_LOG2(F("processJIRSignalsAddressedToOthers Addressed to "), jIrCode.destinationAddress);
 }
 
 #define FORCED_DELAY_TO_DEBOUNCE_SIGNALS 100 // milliSeconds
@@ -338,11 +359,11 @@ unsigned long recentTransmitted = 0xFFFFFFFF;
 boolean isWaitingForEcho = false;
 boolean isEchoReceived = false;
 boolean isReTransmissionRequired = false;
-#define ECHO_TIMEOUT_PERIOD 2000 // In milliseconds 125 // For NEC standard, the transmission period is upto 110 ms
-#define NUM_IRSIGNAL_MIN_RETRANSMITS 2
-#define NUM_IRSIGNAL_MAX_RETRANSMITS 4
+#define ECHO_TIMEOUT_PERIOD 1000 // 1 second // For NEC standard, the transmission period is upto 110 ms
+#define NUM_IRSIGNAL_MIN_RETRANSMITS 1
+#define NUM_IRSIGNAL_MAX_RETRANSMITS 2
 void sendIRSignals(unsigned long iRcode){
-  Serial.print(F("Send raw Ir Signal "));Serial.println(iRcode, HEX);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("Send raw Ir Signal 0x"));JAGI_PRINT.println(iRcode, HEX);
   recentTransmitted = 0xFFFFFFFF;
   isWaitingForEcho = false;
   isEchoReceived = false;
@@ -361,8 +382,9 @@ void sendIRSignals(unsigned long iRcode){
       mySender.send(NEC,iRcode,32);
       sendTimeStamp = millis();
       long timeTakenToSend = sendTimeStamp - sendTimeStampBefore;
-      Serial.print(F(" Tx attempt ")); Serial.print(i);Serial.print(F(" : "));
-      Serial.print(sendTimeStamp); Serial.print(F(" - "));Serial.print(sendTimeStampBefore); Serial.print(F(" = "));Serial.println(timeTakenToSend,DEC);
+      JAGI_LOG2(F("Tx attempt "), i);
+      //JAGI_LOG_TIME;JAGI_PRINT.print(F(" Tx attempt ")); JAGI_PRINT.print(i);
+      //JAGI_PRINT.print(F(" : "));JAGI_PRINT.print(sendTimeStamp); JAGI_PRINT.print(F(" - "));JAGI_PRINT.print(sendTimeStampBefore); JAGI_PRINT.print(F(" = "));JAGI_PRINT.println(timeTakenToSend);
       rawIRSignalsSent++;
       isWaitingForEcho = true;
       isReTransmissionRequired = false;
@@ -370,14 +392,15 @@ void sendIRSignals(unsigned long iRcode){
     while(true){
       receiveIRSignals();
       if(isEchoReceived){
-        //Serial.println(F("Echo Received"));
+        //JAGI_PRINT.println(F("Echo Received"));
         break;
       }
       if(hasTimedOut(sendTimeStamp, ECHO_TIMEOUT_PERIOD)){
-        Serial.print(millis()); Serial.println(F(" Echo Timed Out"));
+        JAGI_LOG1(F("Echo Timed Out"));
         isReTransmissionRequired = true;
         rawIRSignalsEchoFailed++;
         rawIRSignalsReTransmitted++;
+        isWaitingForEcho = false;
         break;
       }
     }
@@ -385,7 +408,7 @@ void sendIRSignals(unsigned long iRcode){
       if(i < NUM_IRSIGNAL_MIN_RETRANSMITS) {
         isReTransmissionRequired = true;
         rawIRSignalsReTransmitted++;
-        //Serial.print(F("Force Tx attempt ")); Serial.println(i);
+        JAGI_LOG2(F("Force Tx attempt "), i);
         //delay(200);// else we may simply collide with our selves, actually NO :-(
         continue;
       }
@@ -393,7 +416,7 @@ void sendIRSignals(unsigned long iRcode){
     }
   }while(i < NUM_IRSIGNAL_MAX_RETRANSMITS);
   if(isEchoReceived) {
-    Serial.print(F("Raw Send Signal complete "));Serial.println(iRcode, HEX);
+    JAGI_LOG_TIME;JAGI_PRINT.print(F("Raw Send Signal complete 0x"));JAGI_PRINT.println(iRcode, HEX);
   }
 }
 
@@ -415,29 +438,29 @@ void receiveIRSignals(){
       if(isWaitingForEcho && necIrSignal.value == recentTransmitted){
         isEchoReceived = true;
         isWaitingForEcho = false;
-        //Serial.print(F("Echo Received ")); Serial.println(necIrSignal.value, HEX);
+        JAGI_LOG_TIME;JAGI_PRINT.print(F("Echo Received 0x")); JAGI_PRINT.println(necIrSignal.value, HEX);
         goto enableReceiver;
       }
       if(bufLength>0){
         NecIrSignal* prevElement = buf.peek(bufLength-1);
         //if(!prevElement) goto enableReceiver; // Needed only in multithreading or ISR
         if(necIrSignal.value == 0xFFFFFFFF || necIrSignal.value == prevElement->value) {
-          //Serial.print(F("Duplicate found ")); Serial.println(necIrSignal.value, HEX);
+          JAGI_LOG_TIME;JAGI_PRINT.print(F("Duplicate found 0x")); JAGI_PRINT.println(necIrSignal.value, HEX);
           rawIRSignalsDuplicates++;
           goto enableReceiver;
         }
       }
       if(!buf.add(necIrSignal)) {    // Add it to the buffer
-        Serial.print(F("Q failed ")); Serial.println(necIrSignal.value, HEX);
+        JAGI_LOG_TIME;JAGI_PRINT.print(F("Q failed 0x")); JAGI_PRINT.println(necIrSignal.value, HEX);
         rawIRSignalsDropped++;
       }
     } else { // This is an indication of possible collision or a simple hardware problem, hence re-transmit
-      Serial.println(F("Decode failed"));
+      JAGI_LOG1(F("Decode failed"));
       rawIRSignalsDecodeFailures++;
       if(isWaitingForEcho){
         rawIRSignalsEchoFailed++;// = 0;
         isReTransmissionRequired = true;
-        Serial.print(F("Raw Echo failed for ")); Serial.println(recentTransmitted, HEX);
+        JAGI_LOG_TIME;JAGI_PRINT.print(F("Raw Echo failed for 0x")); JAGI_PRINT.println(recentTransmitted, HEX);
         goto enableReceiver;
       }
     }
@@ -450,37 +473,37 @@ enableReceiver:
 void print_buf_contents()
 {
   NecIrSignal * e = 0;
-  Serial.println("\n______Peek contents of ring buffer_______");
+  JAGI_LOG1("______Peek contents of ring buffer_______");
   // Keep looping until pull() returns NULL
   for (int i = 0 ; i<buf.numElements(); i++) {
     e = buf.peek(i);
     if(!e) break;
-    Serial.print(F("t ")); Serial.print(e->timestamp);
-    Serial.print(F(" v ")); Serial.println(e->value, HEX);
+    JAGI_LOG_TIME; JAGI_PRINT.print(F("t ")); JAGI_PRINT.print(e->timestamp);
+    JAGI_PRINT.print(F(" v 0x")); JAGI_PRINT.println(e->value, HEX);
   }
-  Serial.println("______Done peeking contents_______");
+  JAGI_LOG1("______Done peeking contents_______");
 }
 
 // Print the buffer's contents then empty it
 void dump_buf_contents()
 {
   NecIrSignal e;
-  Serial.println("\n______Dumping contents of ring buffer_______");
+  JAGI_LOG1("\n______Dumping contents of ring buffer_______");
   // Keep looping until pull() returns NULL
   while (buf.pull(&e))
   {
-    Serial.print(F("t ")); Serial.print(e.timestamp);
-    Serial.print(F(" v ")); Serial.println(e.value, HEX);
+    JAGI_LOG_TIME;JAGI_PRINT.print(F("t ")); JAGI_PRINT.print(e.timestamp);
+    JAGI_PRINT.print(F(" v 0x")); JAGI_PRINT.println(e.value, HEX);
   }
-  Serial.println("______Done dumping contents_______");
+  JAGI_LOG1("______Done dumping contents_______");
 }
 
 void printIrSignalStats(){
-  Serial.println(F("RawTx\tEchoFail\tReTransmitted"));
-  Serial.print(rawIRSignalsSent);Serial.print(F("\t"));Serial.print(rawIRSignalsEchoFailed);Serial.print(F("\t"));Serial.println(rawIRSignalsReTransmitted);
-  Serial.println(F("RawRx\tDecodeFail Duplicate Dropped"));
-  Serial.print(rawIRSignalsReceived,DEC);Serial.print(F("\t"));Serial.print(rawIRSignalsDecodeFailures,DEC);Serial.print(F("\t"));
-  Serial.print(rawIRSignalsDuplicates,DEC);Serial.print(F("\t"));Serial.println(rawIRSignalsDropped,DEC);
+  JAGI_LOG1(F("RawTx\tEchoFail\tReTransmitted"));
+  JAGI_LOG6(rawIRSignalsSent, F("\t"), rawIRSignalsEchoFailed, F("\t"), rawIRSignalsReTransmitted, F(""));
+  JAGI_LOG1(F("RawRx\tDecodeFail\tDuplicate\tDropped"));
+  JAGI_LOG_TIME; JAGI_PRINT.print(rawIRSignalsReceived,DEC);JAGI_PRINT.print(F("\t"));JAGI_PRINT.print(rawIRSignalsDecodeFailures,DEC);JAGI_PRINT.print(F("\t"));
+  JAGI_PRINT.print(rawIRSignalsDuplicates,DEC);JAGI_PRINT.print(F("\t"));JAGI_PRINT.println(rawIRSignalsDropped,DEC);
 }
 
 // this is used to blink the identity led
@@ -508,21 +531,21 @@ unsigned long formatCodeForSendingResponse(byte destinationAddress, byte sourceA
 // In this function MSB of command is forcefully modified MSB=0 means request, MSB=1 means response
 unsigned long formatCodeForSending(boolean typeOfSignal, byte destinationAddress, byte sourceAddress, byte command, byte commandParams){
   unsigned long retVal = 0;
-  //Serial.print(typeOfSignal, HEX); Serial.print("-");Serial.print(destinationAddress, HEX); Serial.print("-");Serial.print(sourceAddress, HEX); Serial.print("-");
-  //Serial.print(command, HEX); Serial.print("-");Serial.println(commandParams, HEX);
+  //JAGI_PRINT.print(typeOfSignal, HEX); JAGI_PRINT.print("-");JAGI_PRINT.print(destinationAddress, HEX); JAGI_PRINT.print("-");JAGI_PRINT.print(sourceAddress, HEX); JAGI_PRINT.print("-");
+  //JAGI_PRINT.print(command, HEX); JAGI_PRINT.print("-");JAGI_PRINT.println(commandParams, HEX);
   retVal = retVal | destinationAddress;
   retVal = retVal << 8;
-  //Serial.println(retVal, HEX); 
+  //JAGI_PRINT.println(retVal, HEX); 
   retVal = retVal | sourceAddress;
   retVal = retVal << 8;
-  //Serial.println(retVal, HEX); 
+  //JAGI_PRINT.println(retVal, HEX); 
   if(typeOfSignal) command = command & 0x7F; // always set the MSB to 0 to indicate it is a request
   else command = command | 0x80; // always set the MSB to 1 to indicate it is a response
   retVal = retVal | command;
   retVal = retVal << 8;
-  //Serial.println(retVal, HEX); 
+  //JAGI_PRINT.println(retVal, HEX); 
   retVal = retVal | commandParams;
-  //Serial.println(retVal, HEX);
+  //JAGI_PRINT.println(retVal, HEX);
   return retVal;
 }
 
@@ -553,9 +576,9 @@ JIRCode& convertToJIRCodeFromRawDecodedValue(JIRCode& jIrCode){
 }
 
 void printSerialJIRCode(JIRCode& jIrCode){
-  Serial.print(jIrCode.protocolNum,DEC);Serial.print(F("-"));Serial.print(jIrCode.value,HEX);Serial.print(F("-"));
-  Serial.print(jIrCode.destinationAddress,HEX);Serial.print(F("-"));Serial.print(jIrCode.sourceAddress,HEX);Serial.print(F("-"));
-  Serial.print(jIrCode.command,HEX);Serial.print(F("-"));Serial.println(jIrCode.parameterData,HEX);
+  JAGI_LOG_TIME;JAGI_PRINT.print(jIrCode.protocolNum,DEC);JAGI_PRINT.print(F("-"));JAGI_PRINT.print(jIrCode.value,HEX);JAGI_PRINT.print(F("-"));
+  JAGI_PRINT.print(jIrCode.destinationAddress,HEX);JAGI_PRINT.print(F("-"));JAGI_PRINT.print(jIrCode.sourceAddress,HEX);JAGI_PRINT.print(F("-"));
+  JAGI_PRINT.print(jIrCode.command,HEX);JAGI_PRINT.print(F("-"));JAGI_PRINT.println(jIrCode.parameterData,HEX);
 }
 
 // TODO Need to check so that the overflow doesnot cause too much time to timeout
@@ -564,6 +587,7 @@ unsigned long findElapsedTimeInMillis(const unsigned long& lastEventTime){
   unsigned long retVal;
   unsigned long currentTime = millis();
   retVal = currentTime - lastEventTime;
+  //JAGI_LOG6(currentTime , F(" - "), lastEventTime, F(" = "), retVal, F(" ms"));
   if(retVal < 0 ) { // Overflow is automatically taken care with unsigned numbers, we need not do this.
     retVal = (TIME_OVERFLOW_VALUE - lastEventTime) + currentTime;
   }
@@ -572,7 +596,7 @@ unsigned long findElapsedTimeInMillis(const unsigned long& lastEventTime){
 
 boolean hasTimedOut(const unsigned long& lastEventTime, const unsigned long& timeOutPeriod){
   long timeRemaining = timeOutPeriod - findElapsedTimeInMillis(lastEventTime);
-  //Serial.print(F("timeRemaining "));Serial.println(timeRemaining);
+  //JAGI_LOG4(F("timeRemaining "), lastEventTime, F(":"), timeRemaining);
   if (timeRemaining > 0 ) return false;
   return true;
 }
@@ -618,12 +642,13 @@ void identifySelf(){
 }
 
 void printIdentity(){
-  if(MASTER_MODE) Serial.print(F("MASTER")); else Serial.print(F("SLAVE"));
-  Serial.print(" 0x");Serial.print(DEVICE_IDENTITY,HEX); Serial.print(" Color ");
-  if (DEVICE_IDENTITY & 0x0008) Serial.print("R"); else Serial.print("-");
-  if (DEVICE_IDENTITY & 0x0004) Serial.print("G"); else Serial.print("-");
-  if (DEVICE_IDENTITY & 0x0002) Serial.print("B"); else Serial.print("-");
-  if (DEVICE_IDENTITY & 0x0001) Serial.println("Y"); else Serial.println("-");  
+  char color[] = "----";
+  if (DEVICE_IDENTITY & 0x0008) color[0] = 'R';
+  if (DEVICE_IDENTITY & 0x0004) color[1] = 'G';
+  if (DEVICE_IDENTITY & 0x0002) color[2] = 'B';
+  if (DEVICE_IDENTITY & 0x0001) color[3] = 'Y';
+  if(MASTER_MODE) {JAGI_LOG4("MASTER ", DEVICE_IDENTITY, " Color ", color);}
+  else {JAGI_LOG4("SLAVE  ", DEVICE_IDENTITY, " Color ", color);}
 }
 
 /* Important points to note
