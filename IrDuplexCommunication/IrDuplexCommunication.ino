@@ -97,13 +97,13 @@ RingBufCPP<NecIrSignal, MAX_NUM_NECSIGNALS_BUF> buf;
 
 void setup() {
   // Debug console
-  //DebugSerial.begin(9600); // NOTE baud rate 9600
+  //DebugSerial.begin(57600); // NOTE baud rate
 
   Serial.begin(9600);
   delay(2000); while (!Serial); //delay for Leonardo
   // identify the self device id and the mode of operation
   identifySelf();
-  if(MASTER_MODE)JAGI_LOG1(F("Every time you press a key in serial monitor monitoring using HB will be done."));
+  JAGI_LOG1(F("IrDuplexCommunication.ino : Every time you press a key in serial monitor; monitoring using HB will be done."));
   //Enable auto resume and pass it the address of your extra buffer
   //myReceiver.enableAutoResume(myBuffer);
   myReceiver.enableIRIn(); // Start the receiver
@@ -290,8 +290,10 @@ void sendHBRequest(byte currentDeviceId){
 
 #define HB_RESPONSE_CODE_PARAMS 0x00
 void sendHBResponse(JIRCode& jIrCode){
-  unsigned long hbResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_HB,jIrCode.parameterData);
+  byte uptimeInMinutes = millis() / 60000; // obviously will roll over in 256 minutes which is like 4 hours 16 minutes
+  unsigned long hbResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_HB,uptimeInMinutes);
   //mySender.send(NEC,hbResponseCode,32);
+  delay(100);// just like that delay 100 ms
   sendIRSignals(hbResponseCode);
   JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Response Signal sent 0x"));JAGI_PRINT.println(hbResponseCode, HEX);
 }
@@ -362,7 +364,7 @@ boolean isEchoReceived = false;
 boolean isReTransmissionRequired = false;
 #define ECHO_TIMEOUT_PERIOD 1000 // 1 second // For NEC standard, the transmission period is upto 110 ms
 #define NUM_IRSIGNAL_MIN_RETRANSMITS 1
-#define NUM_IRSIGNAL_MAX_RETRANSMITS 2
+#define NUM_IRSIGNAL_MAX_RETRANSMITS 1
 void sendIRSignals(unsigned long iRcode){
   JAGI_LOG_TIME;JAGI_PRINT.print(F("Send raw Ir Signal 0x"));JAGI_PRINT.println(iRcode, HEX);
   recentTransmitted = 0xFFFFFFFF;
