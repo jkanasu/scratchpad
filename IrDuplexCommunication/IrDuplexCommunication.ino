@@ -298,6 +298,27 @@ void sendHBResponse(JIRCode& jIrCode){
   JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Response Signal sent 0x"));JAGI_PRINT.println(hbResponseCode, HEX);
 }
 
+void sendFSResponse(JIRCode& jIrCode){
+  // read the input on analog pin 0:
+  int sensorValue = analogRead(A3);
+  // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
+  float voltage = sensorValue * (5.0 / 1023.0);
+  // print out the value you read:
+  unsigned long fsResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_FANSPEED,voltage);
+  //mySender.send(NEC,hbResponseCode,32);
+  delay(100);// just like that delay 100 ms
+  sendIRSignals(fsResponseCode);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("LS Response Signal sent 0x"));JAGI_PRINT.println(fsResponseCode, HEX);
+}
+
+void sendLSResponse(JIRCode& jIrCode){
+  unsigned long lsResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_LIGHTSTATUS,PINB);
+  //mySender.send(NEC,hbResponseCode,32);
+  delay(100);// just like that delay 100 ms
+  sendIRSignals(lsResponseCode);
+  JAGI_LOG_TIME;JAGI_PRINT.print(F("LS Response Signal sent 0x"));JAGI_PRINT.println(lsResponseCode, HEX);
+}
+
 void processHBResponse(JIRCode& jIrCode){
   JAGI_LOG2(F("HB Response Signal received "), jIrCode.sourceAddress);
   if(jIrCode.sourceAddress>MAX_NUMBER_OF_DEVICES) return;
@@ -322,6 +343,14 @@ void processJIRSignals(JIRCode& jIrCode){
     case REQUEST_HB:
       JAGI_LOG2(F("HB request from "), jIrCode.sourceAddress);
       sendHBResponse(jIrCode);
+      break;        
+    case REQUEST_LIGHTSTATUS:
+      JAGI_LOG2(F("LIGHTSTATUS request from "), jIrCode.sourceAddress);
+      sendLSResponse(jIrCode);
+      break;        
+    case REQUEST_FANSPEED:
+      JAGI_LOG2(F("FANSPEED request from "), jIrCode.sourceAddress);
+      sendFSResponse(jIrCode);
       break;        
     case RESPONSE_HB:
       JAGI_LOG2(F("HB response from "), jIrCode.sourceAddress);
