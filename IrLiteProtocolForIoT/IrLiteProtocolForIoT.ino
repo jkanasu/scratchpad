@@ -98,6 +98,7 @@ typedef struct extendedNecIrSignal ExtendedNecIrSignal;
 
 #define INFORMATION_STATE_INVALID 0
 #define INFORMATION_STATE_VALID 1
+#define INFORMATION_VALIDITY_TIMEOUT 10000
 struct deviceInformation{
   byte id;
   byte informationType;
@@ -408,6 +409,11 @@ byte retryCommand(){
 }
 
 byte postProcessCommandFailure(){
+  DeviceInformation& currentDeviceInformation = deviceInformation[currentItem];
+  // This means we need to mark the information of device as invalid
+  currentDeviceInformation.informationState = INFORMATION_STATE_INVALID;
+  currentDeviceInformation.updateTimestamp = millis();
+  //JAGI_LOG3(currentItem, " rxresp ", true);
   return EVENT_PROCESSING_COMMAND_FAILURE_COMPLETE;
 }
 
@@ -713,9 +719,10 @@ BLYNK_READ(V0)
   JAGI_LOG2(F("Blynk HB to 01 V"),V0);
   DeviceInformation& currentDeviceInformation = deviceInformation[V0];
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    unsigned long uptimeInMinutes = millis() / 1000;
-    Blynk.virtualWrite(V0, uptimeInMinutes, " local secs");
-    //Blynk.virtualWrite(V0, "? ? ?");
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed HB to 01 V"),V0);
+    //unsigned long uptimeInMinutes = millis() / 1000;
+    //Blynk.virtualWrite(V0, uptimeInMinutes, " local secs");
+    Blynk.virtualWrite(V0, "NotReachable");
     return;
   }
   int uptime = currentDeviceInformation.informationValue;
@@ -727,9 +734,10 @@ BLYNK_READ(V4)
   JAGI_LOG2(F("Blynk HB to 02 V"),V4);
   DeviceInformation& currentDeviceInformation = deviceInformation[V4];
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    unsigned long uptimeInMinutes = millis() / 1000;
-    Blynk.virtualWrite(V4, uptimeInMinutes);
-    //Blynk.virtualWrite(V4, "V4 :-( ? ? ?");
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed HB to 02 V"),V4);
+    //unsigned long uptimeInMinutes = millis() / 1000;
+    //Blynk.virtualWrite(V4, uptimeInMinutes);
+    Blynk.virtualWrite(V4, "NotReachable");
     return;
   }
   int uptime = currentDeviceInformation.informationValue;
@@ -741,9 +749,10 @@ BLYNK_READ(V8)
   JAGI_LOG2(F("Blynk HB to 03 V"),V8);
   DeviceInformation& currentDeviceInformation = deviceInformation[V8];
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    unsigned long uptimeInMinutes = millis() / 1000;
-    Blynk.virtualWrite(V8, uptimeInMinutes);
-    //Blynk.virtualWrite(V8, "V8 :-( ? ? ?");
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed HB to 03 V"),V8);
+    //unsigned long uptimeInMinutes = millis() / 1000;
+    //Blynk.virtualWrite(V8, uptimeInMinutes);
+    Blynk.virtualWrite(V8, "NotReachable");
     return;
   }
   int uptime = currentDeviceInformation.informationValue;
@@ -756,10 +765,11 @@ BLYNK_READ(V12)
   DeviceInformation& currentDeviceInformation = deviceInformation[V12];
   int uptime = currentDeviceInformation.informationValue;
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    unsigned long uptimeInMinutes = millis() / 1000;
-    Blynk.virtualWrite(V12, uptimeInMinutes);
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG3(currentDeviceInformation.updateTimestamp,F("Blynk Failed HB to 04 V"),V12);
+    //unsigned long uptimeInMinutes = millis() / 1000;
+    //Blynk.virtualWrite(V12, uptimeInMinutes);
     //JAGI_LOG_TIME;JAGI_PRINT.print(F("V12 invalid uptime "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(uptimeInMinutes, HEX);
-    //Blynk.virtualWrite(V12, "V12 :-( ? ? ?");
+    Blynk.virtualWrite(V12, "NotReachable");
     return;
   } else {
     JAGI_LOG_TIME;JAGI_PRINT.print(F("V12 uptime "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(uptime, HEX);
@@ -777,7 +787,7 @@ BLYNK_READ(V1)
     return;
   } else {
     JAGI_LOG_TIME;JAGI_PRINT.print(F("V1 PINB "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(pins, HEX);
-    Blynk.virtualWrite(V1, pins, " pins");
+    Blynk.virtualWrite(V1, pins);
   }
 }
 
@@ -787,11 +797,13 @@ BLYNK_READ(V5)
   DeviceInformation& currentDeviceInformation = deviceInformation[V5];
   int pins = currentDeviceInformation.informationValue;
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    Blynk.virtualWrite(V5, PINB, " local pins");
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed PINB to 02 V"),V5);
+    //Blynk.virtualWrite(V5, PINB, " local pins");
+    Blynk.virtualWrite(V5, "--");
     return;
   } else {
     JAGI_LOG_TIME;JAGI_PRINT.print(F("V5 PINB "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(pins, HEX);
-    Blynk.virtualWrite(V5, pins, " pins");
+    Blynk.virtualWrite(V5, pins);
   }
 }
 
@@ -805,7 +817,7 @@ BLYNK_READ(V9)
     return;
   } else {
     JAGI_LOG_TIME;JAGI_PRINT.print(F("V9 PINB "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(pins, HEX);
-    Blynk.virtualWrite(V9, pins, " pins");
+    Blynk.virtualWrite(V9, pins);
   }
 }
 
@@ -815,11 +827,45 @@ BLYNK_READ(V13)
   DeviceInformation& currentDeviceInformation = deviceInformation[V13];
   int pins = currentDeviceInformation.informationValue;
   if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
-    Blynk.virtualWrite(V13, PINB, " local pins");
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed PINB to 04 V"),V13);
+    //Blynk.virtualWrite(V13, PINB, " local pins");
+    Blynk.virtualWrite(V13, "--");
     return;
   } else {
     JAGI_LOG_TIME;JAGI_PRINT.print(F("V13 PINB "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(pins, HEX);
-    Blynk.virtualWrite(V13, pins, " pins");
+    Blynk.virtualWrite(V13, pins);
+  }
+}
+
+BLYNK_READ(V6)
+{
+  JAGI_LOG2(F("Blynk FANSPEED to 02 V"),V6);
+  DeviceInformation& currentDeviceInformation = deviceInformation[V6];
+  int fanspeed = currentDeviceInformation.informationValue;
+  if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed FANSPEED to 02 V"),V6);
+    //Blynk.virtualWrite(V2, FANSPEED, " local speed");
+    Blynk.virtualWrite(V6, "-0-");
+    return;
+  } else {
+    JAGI_LOG_TIME;JAGI_PRINT.print(F("V6 FANSPEED "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(fanspeed);
+    Blynk.virtualWrite(V6, fanspeed);
+  }
+}
+
+BLYNK_READ(V14)
+{
+  JAGI_LOG2(F("Blynk FANSPEED to 04 V"),V14);
+  DeviceInformation& currentDeviceInformation = deviceInformation[V14];
+  int fanspeed = currentDeviceInformation.informationValue;
+  if(currentDeviceInformation.informationState == INFORMATION_STATE_INVALID){
+    if (hasTimedOut(currentDeviceInformation.updateTimestamp,INFORMATION_VALIDITY_TIMEOUT)) JAGI_LOG2(F("Blynk Failed FANSPEED to 04 V"),V14);
+    //Blynk.virtualWrite(V2, FANSPEED, " local speed");
+    Blynk.virtualWrite(V14, 0);
+    return;
+  } else {
+    JAGI_LOG_TIME;JAGI_PRINT.print(F("V14 FANSPEED "));JAGI_PRINT.print(currentDeviceInformation.informationValue,HEX);JAGI_PRINT.print(F(" "));JAGI_PRINT.println(fanspeed);
+    Blynk.virtualWrite(V14, fanspeed);
   }
 }
 
@@ -851,5 +897,3 @@ BLYNK_WRITE(V31)
   JAGI_LOG2(F("Blynk Sig Stats V"), V31);
   printIrSignalStats();
 }
-
-
