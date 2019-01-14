@@ -99,7 +99,7 @@ void setup() {
   // Debug console
   //DebugSerial.begin(57600); // NOTE baud rate
 
-  Serial.begin(9600);
+  Serial.begin(57600);
   delay(2000); while (!Serial); //delay for Leonardo
   // identify the self device id and the mode of operation
   identifySelf();
@@ -209,7 +209,8 @@ void processSerialCommands(){
     case 50: // 2 in ascii
       processSerial2();
       break;
-    case 51: // 3 in ascii
+    case 52: // 4 in ascii
+      processSerial4();
       break;
     case 56: // 8 in ascii
       processSerial8();
@@ -246,6 +247,20 @@ void processSerial1(){
 void processSerial2(){
   JAGI_LOG1(F("Receive signal"));
   processIRSignals();
+}
+
+// The analog step is as per arduino, i.e. 5 / 1024 = 0.0049
+#define ANALOG_VOLTAGE_STEP 0.0049
+void processSerial4(){
+  JAGI_LOG1(F("Print analog pin A4 value"));
+  // read the input on analog pin
+  int sensorValue = analogRead(A4);
+  JAGI_LOG2(F("Sensor Value Read "), sensorValue);
+  // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
+  // Change this range from (0 - 1023) to (0 - 50), this is done because we can only transmit a byte i.e. max 2^8 = 256
+  int voltage = (int)(10.0 * sensorValue * ANALOG_VOLTAGE_STEP);
+  // print out the value you read:
+  JAGI_LOG2(F("Voltage Read "), voltage);
 }
 
 void processSerial8(){
@@ -298,12 +313,15 @@ void sendHBResponse(JIRCode& jIrCode){
   JAGI_LOG_TIME;JAGI_PRINT.print(F("HB Response Signal sent 0x"));JAGI_PRINT.println(hbResponseCode, HEX);
 }
 
+#define FANSPEED_PIN A4
 void sendFSResponse(JIRCode& jIrCode){
-  // read the input on analog pin 0:
-  int sensorValue = analogRead(A3);
+  // read the input on analog pin
+  int sensorValue = analogRead(FANSPEED_PIN);
   // Convert the analog reading (which goes from 0 - 1023) to a voltage (0 - 5V):
-  float voltage = sensorValue * (5.0 / 1023.0);
+  // Change this range from (0 - 1023) to (0 - 50), this is done because we can only transmit a byte i.e. max 2^8 = 256
+  int voltage = (int)(10.0 * sensorValue * ANALOG_VOLTAGE_STEP);
   // print out the value you read:
+  JAGI_LOG2(F("Voltage Read "), voltage);
   unsigned long fsResponseCode = formatCodeForSendingResponse(jIrCode.sourceAddress,RESPONSE_FANSPEED,voltage);
   //mySender.send(NEC,hbResponseCode,32);
   delay(100);// just like that delay 100 ms
